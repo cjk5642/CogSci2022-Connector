@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import warnings
 from scipy.stats import pearsonr, spearmanr
+from collections import Counter
 warnings.filterwarnings('ignore')
 
 from nltk.stem import PorterStemmer
