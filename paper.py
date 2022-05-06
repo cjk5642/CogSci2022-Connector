@@ -118,7 +118,7 @@ swow = load_embeddings_data()
 
 # We evaluate whether the responses show signatures of clustering and/or foraging typically found in semantic retrieval tasks. we use a patchy semantic space and ask whether the candidate responses show any evidence of transitions within and outside the patch, and whether these are related to correct responses from the listener. 
 class PatchForaging:
-  def __init__(self, online: pd.DataFrame = online, patch_name:str = "in_out_transitions.csv", movement_name: str = "patch_words.csv"):
+  def __init__(self, online: pd.DataFrame = online, patch_name:str = "patch_words.csv", movement_name: str = "in_out_transitions.csv"):
     """Initialize variables and run methods to create data
 
     Args:
