@@ -1,3 +1,25 @@
+# Fast and frugal memory search for communcation
+# **Authors**: Collin J. Kovacs, Jasper M. Wilson, and Abhilasha A. Kumar
+# 
+# > *Communication involves searching for optimal utterances
+# within memory and then evaluating those utterances against
+# a target goal. However, whether this search process converges
+# onto the optimal response relatively quickly, or involves more
+# strategic decision-making to evaluate different candidates re-
+# mains understudied. In this work, speakers generated single
+# word “clues” that would enable a listener to correctly iden-
+# tify a pair of words among several distractor words. Speak-
+# ers and listeners generated candidates before producing final
+# responses. Each player was biased towards the first candi-
+# date(s) they generated, even when this candidate was sub-
+# optimal compared to other candidates. Furthermore, straying
+# away from the initial “patch” of responses decreased accuracy
+# in the game. Overall, these findings suggest that individuals
+# tend to identify the relevant semantic cluster early on during
+# semantic search, and are likely to employ the “take-the-first”
+# strategy in ambiguous semantic contexts.*
+
+# Imports
 import os
 import pandas as pd
 import numpy as np
@@ -8,17 +30,44 @@ warnings.filterwarnings('ignore')
 from nltk.stem import PorterStemmer
 ps = PorterStemmer()
 
-def create_new_data_path(path = "new_data"):
-    if not os.path.isdir(path):
-        os.makedirs(path)
-    return path
+# Load Data
+def create_new_data_path(path:str = "new_data") -> str:
+  """Check if the new_data path exists
 
-def cosine_similarity(v1, v2):
+  Args:
+      path (str, optional): Path to the "new_data" folder. Defaults to "new_data".
+
+  Returns:
+      str: the path to the new_data folder
+  """
+  if not os.path.isdir(path):
+      os.makedirs(path)
+  return path
+
+def cosine_similarity(v1: np.array, v2: np.array) -> float:
+  """Calculate the cosine similarity between two vectors
+
+  Args:
+      v1 (np.array): one vector
+      v2 (np.array): another vector
+
+  Returns:
+      float: similarity score between the two vectors
+  """
   v1 = np.array(v1).flatten()
   v2 = np.array(v2).flatten()
   return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
 
-def return_emb(word, source_emb):
+def return_emb(word: str, source_emb: pd.DataFrame) -> str or np.NaN:
+  """Return the word that exists in the embedding
+
+  Args:
+      word (str): given word from game
+      source_emb (pd.DataFrame): embedding dataset
+
+  Returns:
+      str or np.NaN: the filtered word that exists in the embedding dataset
+  """
   try:
     emb = source_emb[word]
     return word
@@ -30,34 +79,16 @@ def return_emb(word, source_emb):
     except KeyError:
       return np.NaN
 
-def return_clue(data):
-  values = []
-  options = ['clueOption1', 'clueOption2', 'clueOption3', 'clueOption4', 'clueOption5', 'clueOption6', 'clueOption7', 'clueOption8']
-  for i in range(len(data)):
-    row = data.loc[i, options].dropna().to_list()
-    try:
-      option = row.index(data.loc[i, 'clueFinal'])
-      values.append(int(options[option].lstrip('clueOption')))
-    except ValueError:
-      values.append(None)
-  return values
+def load_online_data(out_path: str, online_path:str = "./data/online.csv") -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+  """Load the data from the online dataset.
 
-def return_guess(data):
-  values = {'GUESS_1_FINAL': [], 'GUESS_2_FINAL': []}
-  options = ['GuessOption1', 'GuessOption2', 'GuessOption3', 'GuessOption4', 'GuessOption5', 'GuessOption6', 'GuessOption7', 'GuessOption8']
-  guesses = ['GUESS_1_FINAL', 'GUESS_2_FINAL']
-  for i in range(len(data)):
-    row = data.loc[i, options].dropna().to_list()
-    finals = data.loc[i, guesses]
-    for f in guesses:
-      try:
-        option = row.index(finals[f])
-        values[f].append(int(options[option].lstrip('GuessOption')))
-      except ValueError:
-        values[f].append(None)
-  return values.values()
+  Args:
+      out_path (str): the path that the upgraded online dataset should be saved to.
+      online_path (str, optional): the path where the online data exists. Defaults to "./data/online.csv".
 
-def load_online_data(out_path: str, online_path = "./data/online.csv"):
+  Returns:
+      tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]: the different versions of the online dataset
+  """
   rankings = {'Easy': 1, 'Medium': 2, 'Hard': 3}
 
   online = pd.read_csv(online_path)
@@ -68,103 +99,146 @@ def load_online_data(out_path: str, online_path = "./data/online.csv"):
   online_guesses = online.loc[:, ['wordpair_id', 'gameID', 'GuessOption1', 'GuessOption2', 'GuessOption3', 'GuessOption4', 'GuessOption5', 'GuessOption6', 
                                   'GuessOption7', 'GuessOption8', "target1", "target2"]]
   online.to_csv(os.path.join(out_path, "candidate-generation.csv"), index = False)
-  return online, online_clues, online_unique_clues, online_guesses
+  return (online, online_clues, online_unique_clues, online_guesses)
 
-def load_embeddings_data(swow_path = "./data/swow_embeddings.csv"):
+def load_embeddings_data(swow_path:str = "./data/swow_embeddings.csv") -> pd.DataFrame:
+  """Load the SWOW embedding
+
+  Args:
+      swow_path (str, optional): path to the SWOW embeddings. Defaults to "./data/swow_embeddings.csv".
+
+  Returns:
+      pd.DataFrame: the read-in SWOW embeddings
+  """
   return pd.read_csv(swow_path)
 
 new_data_path = create_new_data_path()
-
-########### Extract Online
 online, online_clues, online_unique_clues, online_guesses = load_online_data(out_path=new_data_path)
-
-#glove_path = parentdirectory + "glove_embeddings.csv"
 swow = load_embeddings_data()
 
-# We evaluate whether the responses show signatures of clustering and/or foraging typically found 
-#   in semantic retrieval tasks. we use a patchy semantic space and ask whether the candidate 
-#   responses show any evidence of transitions within and outside the patch, and whether these 
-#   are related to correct responses from the listener. 
-def _patch1(data = online):
-  wpid = data['wordpair_id'].unique()
-  rows = []
-  for t in wpid:
-    temp = online[online['wordpair_id'] == t].reset_index()
-    temp = temp.loc[:, ['wordpair_id', 'gameID', 'clueOption1', 'target1', 'target2', 'Level', 'Acc', 'clueFinal']].reset_index(drop = True)
-    row_frame = temp[['gameID', 'clueFinal', 'Acc', 'Level']]
-    row_frame['wordpair_id'] = t
-    row_frame['target1'] = temp.loc[0, 'target1']
-    row_frame['target2'] = temp.loc[0, 'target2']
-    clues = list(temp['clueOption1'].unique())
-    row_frame['words_in_patch'] = ','.join(clues)
-    row_frame['patchsize'] = len(clues)
-    row_frame['Level'] = temp.loc[0, 'Level']
+# We evaluate whether the responses show signatures of clustering and/or foraging typically found in semantic retrieval tasks. we use a patchy semantic space and ask whether the candidate responses show any evidence of transitions within and outside the patch, and whether these are related to correct responses from the listener. 
+class PatchForaging:
+  def __init__(self, online: pd.DataFrame = online, patch_name:str = "in_out_transitions.csv", movement_name: str = "patch_words.csv"):
+    """Initialize variables and run methods to create data
 
-    rows.append(row_frame)
+    Args:
+        online (pd.DataFrame, optional): online data. Defaults to online.
+        patch_name (str, optional): name of the patch data file to be saved. Defaults to "in_out_transitions.csv".
+        movement_name (str, optional): name of the movement data file to be saved. Defaults to "patch_words.csv".
+    """
+    self.patch_path = os.path.join(new_data_path, patch_name)
+    self.movement_path = os.path.join(new_data_path, movement_name)
+    self.online = online
+    self.patch = self._patch()
+    self.movement = self._determine_movement()
 
-  frame = pd.concat(rows).reset_index(drop = True).rename({'index': 'row_id'}, axis = 1)
-  return frame
+  def _patch(self) -> pd.DataFrame:
+    """Determine the patch of words for each unique wordpair_id.
 
-def _movement(words):
-  first, second = words
-  if first[1] == 1 and second[1] == 1:
-    return 'In-In'
-  elif first[1] == 1 and second[1] == 0:
-    return 'In-Out'
-  elif first[1] == 0 and second[1] == 1:
-    return 'Out-In'
-  else:
-    return 'Out-Out'
+    Returns:
+        pd.DataFrame: A dataframe of the patches with respect to the gameID and wordpair_id.
+    """
+    if os.path.exists(self.patch_path):
+      return pd.read_csv(self.patch_path)
 
-def _determine_movement(patch_data, typ):
-  temp_options = online[['wordpair_id', 'gameID', 'clueOption1', 'clueOption2', 'clueOption3','clueOption4', 'clueOption5', 'clueOption6', 'clueOption7', 'clueOption8', 'clueFinal', 'Acc']]
-  temp_options = temp_options.reset_index().rename({'index': 'row_id'}, axis = 1)
-  rows = []
-  for i in tqdm(range(len(temp_options))):
-    r = {}
-    row = temp_options.loc[i, :].dropna()
-    r['wordpair_id'] = row.wordpair_id
-    r['gameID'] = row.gameID
-    r['In-In'] = 0
-    r['In-Out'] = 0
-    r['Out-In'] = 0
-    r['Out-Out'] = 0
+    wpid = self.online['wordpair_id'].unique()
+    rows = []
+    for t in wpid:
+      temp = self.online[self.online['wordpair_id'] == t].reset_index()
+      temp = temp.loc[:, ['wordpair_id', 'gameID', 'clueOption1', 'target1', 'target2', 'Level', 'Acc', 'clueFinal']].reset_index(drop = True)
+      row_frame = temp[['gameID', 'clueFinal', 'Acc', 'Level']]
+      row_frame['wordpair_id'] = t
+      row_frame['target1'] = temp.loc[0, 'target1']
+      row_frame['target2'] = temp.loc[0, 'target2']
+      clues = list(temp['clueOption1'].unique())
+      row_frame['words_in_patch'] = ','.join(clues)
+      row_frame['patchsize'] = len(clues)
+      row_frame['Level'] = temp.loc[0, 'Level']
 
-    words = list(row.drop(['wordpair_id', 'Acc', 'clueFinal']).to_list())
-    words = [w for w in words if isinstance(w, str)]
-    patch_wordpair = patch_data.loc[patch_data['wordpair_id'] == row.wordpair_id, :]
-    words_in_patch = [(w, 1) if w in patch_wordpair['words_in_patch'].to_list()[0].split(',') else (w, 0) for w in words ]
-    perms = [(words_in_patch[i], words_in_patch[i+1]) for i in range(0, len(words_in_patch)-1)]
-    movements = pd.Series([_movement(p) for p in perms])
-    ps = pd.DataFrame(movements.value_counts().reset_index()).rename({'index': 'Type', 0: 'Count'}, axis = 1)
+      rows.append(row_frame)
 
-    ps_d = dict(zip(ps['Type'], ps['Count']))
-    for k, v in ps_d.items():
-      r[k] = v
-    r['Acc'] = row.Acc
-    r['ClueFinal'] = row.clueFinal
-    rows.append(r)
+    frame = pd.concat(rows).reset_index(drop = True).rename({'index': 'row_id'}, axis = 1)
+    frame.to_csv(self.patch_path, index = False)
+    return frame
+
+  def _movement(self, words: list) -> str:
+    """Method to determine the movement from the first word to the second and if it is
+    inside the patch or not.
+
+    Args:
+        words (list): The two words to be compared for patch movement
+
+    Returns:
+        str: The movement designation.
+    """
+    first, second = words
+    if first[1] == 1 and second[1] == 1:
+      return 'In-In'
+    elif first[1] == 1 and second[1] == 0:
+      return 'In-Out'
+    elif first[1] == 0 and second[1] == 1:
+      return 'Out-In'
+    else:
+      return 'Out-Out'
+
+  def _determine_movement(self) -> pd.DataFrame:
+    """Method to determine the movement of the words inside of the patch and how many times each
+    movement occurs.
+
+    Returns:
+        pd.DataFrame: A dataframe that contains the counts of the movements given the unique
+        identifiers.
+    """
+    if os.path.exists(self.movement_path):
+      return pd.read_csv(self.movement_path)
     
-  total = pd.DataFrame.from_dict(rows)
-  return total
+    temp_options = self.online[['wordpair_id', 'gameID', 'clueOption1', 'clueOption2', 'clueOption3','clueOption4', 'clueOption5', 'clueOption6', 'clueOption7', 'clueOption8', 'clueFinal', 'Acc']]
+    temp_options = temp_options.reset_index().rename({'index': 'row_id'}, axis = 1)
+    rows = []
+    for i in tqdm(range(len(temp_options))):
+      r = {}
+      row = temp_options.loc[i, :].dropna()
+      r['wordpair_id'] = row.wordpair_id
+      r['gameID'] = row.gameID
+      r['In-In'] = 0
+      r['In-Out'] = 0
+      r['Out-In'] = 0
+      r['Out-Out'] = 0
 
-# run methods and movements and save out data
-patch1 = _patch1()
-patch1.to_csv(os.path.join(new_data_path, "in_out_transitions.csv"), index = False)
+      words = list(row.drop(['wordpair_id', 'Acc', 'clueFinal']).to_list())
+      words = [w for w in words if isinstance(w, str)]
+      patch_wordpair = self.patch.loc[self.patch['wordpair_id'] == row.wordpair_id, :]
+      words_in_patch = [(w, 1) if w in patch_wordpair['words_in_patch'].to_list()[0].split(',') else (w, 0) for w in words ]
+      perms = [(words_in_patch[i], words_in_patch[i+1]) for i in range(0, len(words_in_patch)-1)]
+      movements = pd.Series([self._movement(p) for p in perms])
+      ps = pd.DataFrame(movements.value_counts().reset_index()).rename({'index': 'Type', 0: 'Count'}, axis = 1)
 
-movement1 = _determine_movement(patch1, 'NumberOfUniqueClues')
-movement1.to_csv(os.path.join(new_data_path, "patch_words.csv"), index = False)
+      ps_d = dict(zip(ps['Type'], ps['Count']))
+      for k, v in ps_d.items():
+        r[k] = v
+      r['Acc'] = row.Acc
+      r['ClueFinal'] = row.clueFinal
+      rows.append(r)
+      
+    total = pd.DataFrame.from_dict(rows)
+    total.to_csv(self.movement_path, index = False)
+    return total
 
-
-# For each sequence of candidates generated by a person (lighter-flash-bright-lightning), find out 
-#   whether they are closer to one word (quick) or another (glow) and assign a 1 or 2 to each 
-#   candidate response (use swow embeddings for determining semantic similarity)
+# For each sequence of candidates generated by a person (lighter-flash-bright-lightning), 
+# find out whether they are closer to one word (quick) or another (glow) and assign a 1 
+# or 2 to each candidate response (use swow embeddings for determining semantic similarity)
 class Predictions:
   swow_similarity: pd.DataFrame = None
 
   def __init__(self, 
                processed_path: str = new_data_path,
                clue: pd.DataFrame = online_unique_clues):
+    """Init variables and run the methods to extract the data.
+
+    Args:
+        processed_path (str, optional): path for where the new data should be saved. Defaults to new_data_path.
+        clue (pd.DataFrame, optional): dataset that contains all unique clues from the experiment. Defaults to online_unique_clues.
+    """
     self.processed_path = processed_path
     self.clue = clue
     self.melted_clue = self._melt_clue()
@@ -173,12 +247,22 @@ class Predictions:
     if Predictions.swow_similarity is None:
       Predictions.swow_similarity = self.swow_similarity_clustering()
 
-  def _melt_clue(self):
+  def _melt_clue(self) -> pd.DataFrame:
+    """Melt or pivot longer the clue dataset
+
+    Returns:
+        pd.DataFrame: Melted dataframe
+    """
     melted_clue = pd.melt(self.clue, id_vars = ['wordpair_id', 'gameID', 'target1', 'target2']).sort_values(['target1', 'target2']).dropna().reset_index(drop = True)
     melted_clue['value'] = melted_clue['value'].str.lower()
     return melted_clue
 
-  def _create_embeddings(self):
+  def _create_embeddings(self) -> pd.DataFrame:
+    """Extract the embeddings for each target (from wordpair_id) and given clue for eventual similarity measure between each.
+
+    Returns:
+        pd.DataFrame: Dataframe that contains all of the embeddings 
+    """
     all_words = pd.Series(self.melted_clue['target1'].to_list() + self.melted_clue['target2'].to_list() + self.melted_clue['value'].to_list())
     unq_words = list(set(all_words))
     rows = []
@@ -188,7 +272,7 @@ class Predictions:
 
       # collect the embeddings for the targets and the given word
       try:
-        emb = swow[return_emb(word, source = 'swow')].values.tolist()
+        emb = swow[return_emb(word, swow)].values.tolist()
       except:
         emb = none_vector
 
@@ -198,7 +282,13 @@ class Predictions:
     emb_data = emb_data.reset_index().rename({'index': 'value'}, axis = 1)
     return emb_data
 
-  def swow_similarity_clustering(self):
+  def swow_similarity_clustering(self) -> pd.DataFrame:
+    """Establish clusters towards either target given the clue through cosine similarity
+    from each words embeddings.
+
+    Returns:
+        pd.DataFrame: Predictions of which clue should be clustered into which target cluster
+    """
     swow_path = os.path.join(self.processed_path, 'swow_arc.csv')
     if os.path.exists(swow_path):
       return pd.read_csv(swow_path)
@@ -230,4 +320,5 @@ class Predictions:
     swow_data.to_csv(swow_path, index = False)
     return swow_data
 
+pf = PatchForaging()
 predictions = Predictions()
