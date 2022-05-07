@@ -1,0 +1,564 @@
+---
+title: "Connector-CogSci 2022"
+output: pdf_document
+---
+
+# importing packages
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidyboot)
+library(ggplot2)
+library(ggthemes)
+library(broom)
+library(lme4)
+```
+
+# defining control parameters
+
+```{r}
+glm_ctrl = glmerControl(check.conv.singular = .makeCC(action = "ignore",  tol = 1e-4),
+                                 optimizer = "bobyqa")
+lm_ctrl = lmerControl(check.conv.singular = .makeCC(action = "ignore",  tol = 1e-4),
+                                 optimizer = "bobyqa")
+```
+
+
+# read in data
+
+```{r}
+setwd(here::here())
+wordpairs = read_csv("data/wordpairs.csv") %>% select(-Level)
+
+online = read_csv("processed_data/candidate-generation.csv") %>% 
+  mutate(Experiment = "candidate\nstudy") %>% select(-wordpair_id) %>% left_join(wordpairs) %>%
+  distinct() %>%
+    mutate(Level = tolower(Level))%>%
+  mutate(Level = fct_relevel(Level, "easy", "medium", "hard"))
+
+original = read_csv("data/raw_data.csv") %>% 
+  mutate(wordpair = paste(Word1, Word2, sep = "-"))%>%
+    filter(Experiment == "E2") %>%
+  mutate(Experiment = "original\nstudy") %>%
+  left_join(wordpairs)%>%
+  distinct()%>%
+      mutate(Level = tolower(Level))%>%
+  mutate(Level = fct_relevel(Level, "easy", "medium", "hard")) %>%
+  rename(gameID = Subject)
+```
+
+# task comparison
+
+## num participants & trials
+
+```{r}
+length(unique(online$gameID))
+length(unique(original$gameID))
+
+## num trials
+trials_online = online %>% select(Experiment, gameID, wordpair_id, Acc)
+trials_orig = original %>% select(Experiment, gameID, wordpair_id, Player2.ACC ) %>%
+  rename(Acc = Player2.ACC) 
+
+total_trials = rbind(trials_online, trials_orig) %>%
+  group_by(Experiment, gameID ) %>%
+  summarise(n_trials =  n())
+
+## exclude participants who completed less than 15 trials
+
+exclude = (total_trials %>% filter(n_trials < 15))$gameID
+
+total_trials %>%
+  group_by(Experiment) %>%
+  summarise_at(vars(n_trials), mean)
+
+online = online %>% filter(!gameID %in% exclude)
+original = original %>% filter(!gameID %in% exclude)
+```
+
+## guesser accuracy 
+
+```{r}
+acc_online = online %>% select(Experiment, gameID, wordpair_id,Level, Acc)
+orig_online = original %>% 
+  select(Experiment, gameID, wordpair_id, Level, Player2.ACC ) %>%
+  rename(Acc = Player2.ACC) 
+
+acc_model = glmer(data = rbind(acc_online, orig_online), 
+      Acc ~ Experiment + (Experiment|wordpair_id) + (1|gameID), family = "binomial",
+      control=glm_ctrl)
+summary(acc_model)
+```
+### figure 2
+
+```{r}
+mean_acc = rbind(acc_online, orig_online) %>% 
+  group_by(Experiment, gameID)%>%
+  summarise_at(vars(Acc), mean)
+
+fig2 = rbind(acc_online, orig_online) %>% 
+  group_by(Experiment)%>%
+  summarise(ci = list(mean_cl_boot(Acc) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% unnest %>%
+  ggplot(aes(x = Experiment, y = mean, fill = Experiment)) +
+         geom_bar(stat = "identity", position = "dodge", width = 0.7, color= "black")+
+  geom_point(data = mean_acc, aes(x = Experiment, y = Acc, color = Experiment), alpha = 0.5, 
+             position = position_jitter(0.05))+
+        geom_errorbar(aes(ymin=lwr, ymax=upr), size = 0.5, width=.05, 
+                color = "black", position = position_dodge(0.75))+
+  theme_few()+
+  scale_fill_calc()+
+  scale_color_calc()+
+  labs(y = "mean accuracy", x = "")+
+  theme(aspect.ratio = 1)+
+   theme(axis.title = element_text(size = rel(2)),
+         legend.position = c(1.5,0.7),
+          legend.title = element_text(face = "bold", size = rel(1.5)),
+         legend.text  = element_text(size = rel(1.5)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+ggsave("plots/fig2.pdf", fig2)
+```
+
+## proportion of clues
+
+highly correlated clue selection proportions
+```{r}
+clues_online = online %>% select(Experiment, gameID, wordpair_id, Level, clueFinal)
+clues_orig = original %>% select(Experiment, gameID, wordpair_id, Level, Clue1) %>%
+    rename(clueFinal = Clue1)
+
+clues_online = clues_online %>% 
+  mutate(clueFinal = ifelse(clueFinal == "emotions", "emotion", clueFinal))
+
+clue_counts = rbind(clues_online, clues_orig) %>% 
+  group_by(Experiment, wordpair_id, Level, clueFinal) %>%
+  summarise(n = n())
+
+clue_final = clue_counts %>%
+  group_by(Experiment, wordpair_id, Level) %>%
+  summarise_at(vars(n), sum) %>% rename(total = n) %>% left_join(clue_counts) %>%
+  mutate(proportion = n/total) %>%
+  select(-c(n, total))
+
+propmodel_exp = lme4::lmer(data = clue_final, 
+                           proportion ~ Experiment + (Experiment|wordpair_id) ,control= lm_ctrl)
+summary(propmodel_exp)
+
+propmodel_noexp = lme4::lmer(data = clue_final, proportion ~ 1 + (1|wordpair_id) ,control= lm_ctrl)
+summary(propmodel_noexp)
+anova(propmodel_exp, propmodel_noexp)
+```
+## RT
+```{r}
+online_rt = online %>% 
+  select(gameID, wordpair_id, Experiment, Level, TBOption1,GUESS_OPTION1_TIME, GUESS_OPTION2_TIME)%>%
+  mutate(guesstime = GUESS_OPTION1_TIME+GUESS_OPTION2_TIME) %>%
+  select(-c(GUESS_OPTION1_TIME,GUESS_OPTION2_TIME))
+
+original_rt = original %>% 
+  select(gameID, wordpair_id, Experiment, Level, Player1.RT,Player2.RT) %>% 
+  rename(TBOption1 = Player1.RT, guesstime = Player2.RT)
+
+rt_data =  rbind(online_rt, original_rt) %>%
+  mutate(TBOption1 = TBOption1/1000,
+         guesstime = guesstime/1000,
+         Experiment = fct_recode(Experiment, `candidate study` = "candidate\nstudy",
+                                 `original study` = "original\nstudy"))
+```
+### figure 3
+```{r}
+speaker_rt_plot = rt_data %>%
+  filter(TBOption1 < 120) %>%
+  group_by(Experiment) %>%
+  ggplot(aes(x = TBOption1, group = Experiment, fill = Experiment)) + 
+  geom_density(alpha = 0.8)+
+  theme_few()+
+  scale_fill_calc()+
+  labs(title = "RT to generate clue/first candidate", x = "")+
+  scale_x_continuous(breaks = seq(0,120, 25), limits = c(0,120))+
+   theme(axis.title = element_text(size = rel(2)),
+         legend.position = c(.80,.80),
+          legend.title = element_blank(),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+
+guesser_rt_plot = rt_data %>%
+  filter(guesstime < 120) %>%
+  group_by(Experiment, Level) %>%
+  ggplot(aes(x = guesstime, group = Experiment, fill = Experiment)) + 
+  geom_density(alpha = 0.8)+
+  theme_few()+
+  scale_fill_calc()+
+  scale_x_continuous(breaks = seq(0,120, 25), limits = c(0,120))+
+  labs(title = "RT to generate guesses/first candidates", x = "RT (seconds)")+
+   theme(axis.title = element_text(size = rel(2)),
+         legend.position = "none",
+          legend.title = element_blank(),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+
+fig3 = gridExtra::grid.arrange(speaker_rt_plot, guesser_rt_plot)
+ggsave("plots/fig3.pdf", fig3, width = 10, height = 8)
+```
+### model
+```{r}
+summary(lmerTest::lmer(data =rt_data %>%filter(TBOption1 < 120),
+                       TBOption1 ~ Experiment + (1|gameID) + (Experiment|wordpair_id),
+                       control=lm_ctrl))
+
+summary(lmerTest::lmer(data = rt_data %>% filter(guesstime < 120), 
+                       guesstime ~ Experiment + (1|gameID) + (Experiment|wordpair_id),
+                       control=lm_ctrl))
+```
+
+# response selection
+
+## selection behavior
+
+### clue candidate proportions
+
+people tend to select the first candidate as the final clue
+
+```{r}
+clueprops = online %>% 
+group_by(wordpair_id, Level, SelectedClue)%>%
+  summarise(n = n()) %>% 
+  mutate(SelectedClue = ifelse(is.na(SelectedClue), "none", SelectedClue))
+
+clueprops_final = clueprops %>%
+  group_by(wordpair_id, Level)%>%
+  summarise_at(vars(n), sum) %>% rename(sum = n)%>%
+  left_join(clueprops)%>%
+  mutate(prop = n/sum) %>%
+  select(-c(n,sum)) %>%
+  pivot_wider(names_from = SelectedClue, values_from = prop)%>%
+  pivot_longer(names_to = "SelectedClue", cols = `1`:`6`) %>%
+  rename(prop = value) %>%
+  mutate(prop = ifelse(is.na(prop), 0, prop))
+
+ ## lm
+ 
+ model_selection = lm(data = clueprops_final,
+      prop ~ SelectedClue*Level)
+ car::Anova(model_selection)
+ 
+```
+
+### guess candidate proportions
+
+```{r}
+guessprops = online %>% 
+  select(wordpair_id, Level, SelectedGuess1, SelectedGuess2) %>%
+  pivot_longer(names_to = "guess", cols = SelectedGuess1:SelectedGuess2) %>%
+group_by(wordpair_id, Level, guess, value)%>%
+  summarise(n = n()) %>% 
+  mutate(value = ifelse(is.na(value), 0, value),
+         value = factor(value),
+         value = fct_recode(value, none= "0"))
+
+guessprops_final = guessprops %>%
+  group_by(wordpair_id, Level, guess)%>%
+  summarise_at(vars(n), sum) %>% rename(sum = n)%>%
+  left_join(guessprops)%>%
+  mutate(prop = n/sum) %>%
+  select(-c(n,sum)) %>%
+  pivot_wider(names_from = value, values_from = prop)%>%
+  pivot_longer(names_to = "choice", cols = `1`:`8`) %>%
+  rename(prop = value) %>%
+  mutate(prop = ifelse(is.na(prop), 0, prop))
+
+ ## lm
+ 
+guess_selection = lm(data = guessprops_final,
+      prop ~ guess*choice*Level)
+car::Anova(guess_selection)
+ 
+```
+
+### figure 4
+```{r}  
+clueprops_fig = clueprops_final %>%
+  group_by(Level, SelectedClue) %>%
+  summarise(ci = list(mean_cl_boot(prop) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% unnest %>%
+  mutate(difficulty = Level) %>%
+  ggplot(aes(x = SelectedClue, y = mean, group = difficulty, color = difficulty)) +
+  geom_line(size = 1)+
+  geom_errorbar(aes(ymin=lwr, ymax=upr), size = 0.5, width=.1, 
+                color = "lightgray", position = position_dodge(0))+
+  geom_point(size = 2)+
+  theme_few()+
+  scale_fill_calc()+
+  scale_color_calc()+
+  labs(y = "mean proportion\nof selection", x = "", title = "clue selection")+
+  theme(axis.title = element_text(size = rel(2)),
+         legend.position = c(0.85,0.75),
+          legend.title = element_text(face = "bold", size = rel(2)),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+ 
+ guessprops_fig = guessprops_final %>%
+     mutate(guess = fct_recode(guess, first = "SelectedGuess1", second = "SelectedGuess2")) %>%
+  group_by (guess, choice) %>%
+  summarise(ci = list(mean_cl_boot(prop) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% unnest %>%
+  ggplot(aes(x = choice, y = mean, group = guess, 
+             color = guess)) +
+    geom_line(size = 1)+
+    geom_errorbar(aes(ymin=lwr, ymax=upr), size = 0.5, width=.1, 
+                color = "lightgray", position = position_dodge(0))+
+    geom_point(size = 2)+
+    theme_few()+
+    scale_fill_calc()+
+    scale_color_colorblind()+
+    labs(y = "mean proportion\nof selection", x = "selected candidate", title = "guess selection")+
+    theme(axis.title = element_text(size = rel(2)),
+          legend.position = c(0.85,0.75),
+          legend.title = element_text(face = "bold", size = rel(2)),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+ 
+fig4 =  gridExtra::grid.arrange(clueprops_fig, guessprops_fig)
+ggsave("plots/fig4.pdf", fig4, width = 10, height = 10)
+```
+
+## accuracy across selections
+
+### clue candidate accuracy
+
+```{r}
+cluedata = online %>%
+  filter(SelectedClue %in% c(1,2,3,4)) %>%
+  mutate(SelectedClue = ifelse(is.na(SelectedClue), "none", SelectedClue),
+         initial = ifelse(SelectedClue %in% c(1), "first candidate",
+                          "later candidate"))
+
+examples = cluedata %>% select(Level, wordpair_id, clueFinal, initial, Acc) %>%
+  group_by(Level, wordpair_id, clueFinal, initial) %>%
+  summarise(acc = mean(Acc)) %>%
+  pivot_wider(names_from = initial, values_from = acc)
+
+## accuracy vs. clue divided by wordpair
+
+model  = glmer(data = cluedata, Acc ~ Level*initial + (1|gameID), family = "binomial",control=glm_ctrl)
+summary(model)
+```
+### guess candidate accuracy
+
+```{r}
+guessdata = online %>%
+  filter(SelectedGuess1 %in% c(1,2,3,4) & SelectedGuess2 %in% c(1,2,3,4)) %>%
+  mutate(SelectedGuess1 = ifelse(is.na(SelectedGuess1), "none", SelectedGuess1),
+         SelectedGuess2 = ifelse(is.na(SelectedGuess2), "none", SelectedGuess2),
+         initial = ifelse(SelectedGuess1 %in% c(1) & SelectedGuess2 %in% c(2), 
+                          "first candidate",
+                          "later candidate"))
+
+View(guessdata %>% select(wordpair_id, SelectedGuess1, SelectedGuess2, initial))
+
+## accuracy vs. clue divided by wordpair
+
+model  = glmer(data = guessdata, Acc ~ Level*initial + (initial|gameID) + (initial|wordpair),
+               family = "binomial", control=glm_ctrl)
+
+car::Anova(model)
+summary(model)
+```
+
+### figure 5
+
+```{r}
+clueplotdata = cluedata %>% select(Level, wordpair_id, initial, Acc) %>% 
+  mutate(task = "clue selection")
+guessplotdata = guessdata %>% select(Level, wordpair_id, initial, Acc) %>% 
+  mutate(task = "guess selection")
+
+View(cluedata %>% filter(wordpair_id == "birth-hand") %>% select(clueOption1, clueOption2, clueOption3, clueOption4, clueFinal, initial, Acc))
+
+fig5 = rbind(clueplotdata, guessplotdata) %>%
+  rename(difficulty = Level, `final choice` = initial) %>%
+   group_by(task, difficulty,  `final choice`) %>%
+summarise(ci = list(mean_cl_boot(Acc) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% unnest %>%
+  ggplot(aes(x = difficulty, y = mean,
+             group =  `final choice`, fill =`final choice`)) +
+         geom_bar(stat = "identity", position = "dodge", width = 0.7, color= "black")+
+        geom_errorbar(aes(ymin=lwr, ymax=upr), size = 0.5, width=.1, 
+                color = "black", position = position_dodge(0.75))+
+  theme_few()+
+  scale_fill_excel()+
+  facet_wrap(~task, nrow = 1)+
+  labs(y = "mean accuracy", x = "difficulty", title = "")+
+  theme(axis.title = element_text(size = rel(2)),
+        legend.position = c(0.90,0.85),
+          legend.title = element_text(face = "bold", size = rel(2)),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+
+ggsave("plots/fig5.pdf", fig5, width = 15, height = 8)
+```
+
+# semantic search analysis
+
+```{r}
+patchwords = read_csv("processed_data/patch_words.csv")
+
+clueinpatch = patchwords %>%
+  mutate(clue_in_patch = ifelse(str_detect(words_in_patch, clueFinal),1,0)) %>%
+  select(clueFinal, words_in_patch, clue_in_patch)
+
+clueinpatch %>% summarise(mean = mean(clue_in_patch))
+# example for figure 6
+((patchwords %>% select(wordpair_id, words_in_patch) %>% filter(wordpair_id == "cave-knight") %>%
+    pull(words_in_patch))[1] %>% str_split(","))[[1]]
+
+View(online %>% filter(wordpair_id == "cave-knight" & clueFinal == "shining") %>%
+       select(clueOption1:clueOption8))
+```
+
+### solved and unsolved trials
+
+unsolved trials have greater number of out-out and fewer in-in transitions
+
+```{r}
+transitions = read_csv("processed_data/in_out_transitions.csv")
+
+acc_transitions = transitions %>%
+  pivot_longer(names_to = "transition", cols = `In-In`:`Out-Out`) %>%
+  rename(num_transitions = value) %>%
+  mutate(accuracy = fct_recode(factor(Acc), correct = "1", incorrect = "0"),
+         accuracy = fct_relevel(accuracy, "correct", "incorrect"),
+         transition = factor(transition)) 
+
+
+## lm
+contrasts(acc_transitions$transition) = contr.treatment(4, base = 1)
+acc_model = lmer(data = acc_transitions, 
+      num_transitions ~ accuracy*transition +
+         (accuracy*transition|gameID) + (accuracy*transition|gameID),control=lm_ctrl)
+
+summary(acc_model)
+car::Anova(acc_model)
+
+```
+
+### figure 7
+
+```{r}
+fig7 = acc_transitions %>%
+  group_by(accuracy, transition)%>%
+  summarise(ci = list(mean_cl_boot(num_transitions) %>% 
+                        rename(mean=y, lwr=ymin, upr=ymax))) %>% unnest %>%
+  ggplot(aes(x = transition, y = mean, group = accuracy, 
+             fill =accuracy )) +
+         geom_bar(stat = "identity", position = "dodge", width = 0.7, color= "black")+
+        geom_errorbar(aes(ymin=lwr, ymax=upr), size = 0.5, width=.1, 
+                color = "black", position = position_dodge(0.75))+
+   theme_few()+
+  scale_fill_tableau()+
+  scale_color_calc()+
+  labs(y = "mean number of transitions")+
+  theme(axis.title = element_text(size = rel(2)),
+        legend.position = c(0.90, 0.92),
+          legend.title = element_blank(),
+         legend.text  = element_text(size = rel(2)),
+         plot.title = element_text(hjust = .5, size = rel(2.5)),
+         strip.text.x = element_text(size = rel(2.5)),
+         axis.text.x = element_text(size = rel(2.5)))
+
+ggsave("plots/fig7.pdf", fig7, width = 10, height = 8)
+```
+
+# ARC
+
+## ARC function
+
+We use the function available via the memoryOrg package (incompatible with current R version), with the following function definition:
+
+```{r}
+ARC_correct <- function(correct, category) { 
+  # correct = vector of 1s/0s indicating a response as correct, category = vector of category indicator
+  N = sum(correct) # sum of recall_correct vector (CORRECT RECALL)
+  cat_count <- plyr::count(category) # get category frequency
+  c = length(cat_count$freq) # length of category frequency vector (number of categories)
+  maxrep = N - c # calculate max for ARC denominator and other measures
+  sum_ni_sq = sum(cat_count$freq^2) # get sums of squared number of each category for E(r) numerator
+  Erepits = (sum_ni_sq / N) - 1 # compute E(r) (Expected Reps Given Recall N)
+  rle_length <- rle(category) # get Run Length Encoding (lengths and values)
+  repits = sum(rle_length$lengths - 1) # take lengths (sequence length) and minus 1 for reps, then sum
+  BBD = repits - Erepits # Bousfield and Bousfield deviation
+  MRR = repits / maxrep # modified ratio of repetition
+  ARC = (repits - Erepits) / (maxrep - Erepits) # calculate ARC
+  out_list <- list(ARC = ARC, MRR = MRR, BBD = BBD, Correct_N = N, Repetitions = repits,
+                   Max = maxrep, Er = Erepits)
+  return(out_list)
+}
+```
+
+We input the data for ARC calculations, based on scripts available in our Jupyter notebook.
+```{r}
+
+arc_swow = read_csv("processed_data/swow_arc.csv") %>% 
+  mutate(correct = 1)
+
+arc_calc = arc_swow %>% 
+  group_by(wordpair_id, gameID) %>%
+  summarize(pattern = paste(Prediction_SWOW, collapse = ','),
+            include = paste(correct, collapse = ','),
+            words = paste(value, collapse = ','))
+
+## creating ARC scores
+arc_calc$ARC = NA
+for(i in 1:nrow(arc_calc)){
+  correct = as.numeric(unlist(strsplit(arc_calc$include[i],",")))
+  labels = unlist(strsplit(arc_calc$pattern[i],","))
+  ARC = ARC_correct(correct, labels)$ARC
+  arc_calc[i,"ARC"] = ARC
+}
+```
+
+## mean ARC 
+
+```{r}
+arc_calc %>% ungroup() %>% summarise(mean = mean(ARC, na.rm = TRUE), sd = sd(ARC, na.rm = TRUE)) 
+
+t.test(arc_calc$ARC, mu = 0, alternative = "two.sided")
+
+## read in online data
+
+arc_calc = left_join(arc_calc, online %>% select(wordpair_id, gameID, Level, Acc, SelectedClue)) %>%
+  mutate(SelectedClue = ifelse(is.na(SelectedClue), 0, SelectedClue))
+
+arc_calc %>%
+  group_by(Level)%>%
+  summarise(mean = mean(ARC, na.rm = TRUE), sd = sd(ARC, na.rm = TRUE))
+
+```
+## ARC by accuracy & level
+```{r}
+arc_calc$Acc = as.factor(arc_calc$Acc)
+arc_model = lme4::lmer(data = arc_calc, ARC ~ Acc + (1|gameID) + (1|wordpair_id),
+                           control=lm_ctrl)
+summary(arc_model)
+
+arc_model = lme4::lmer(data = arc_calc, ARC ~ Level + (Level|gameID) + (1|wordpair_id),
+                           control=lm_ctrl)
+
+summary(arc_model)
+```
+
+
+
